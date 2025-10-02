@@ -26,6 +26,9 @@ app.use(cors({
     'http://killiansarsah.me',
     'https://killiansarsah.me',
     'https://supportdesk-1im7.onrender.com',
+    'https://support-ticket1.netlify.app',
+    'https://singular-brigadeiros-f7651e.netlify.app',
+    /\.netlify\.app$/,
     process.env.FRONTEND_URL
   ].filter(Boolean),
   credentials: true,

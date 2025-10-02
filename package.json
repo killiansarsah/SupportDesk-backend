@@ -7,7 +7,8 @@
     "dev": "node server.js",
     "reset-users": "node reset-users.js",
     "hash-passwords": "node hash-passwords.js",
-    "remove-demo-users": "node remove-demo-users.js"
+    "remove-demo-users": "node remove-demo-users.js",
+    "create-demo-users": "node create-demo-users.js"
   },
   "dependencies": {
     "@types/nodemailer": "^7.0.2",
