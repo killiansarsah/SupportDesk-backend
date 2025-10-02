@@ -5,6 +5,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "build": "echo 'Build completed'",
     "reset-users": "node reset-users.js",
     "hash-passwords": "node hash-passwords.js",
     "remove-demo-users": "node remove-demo-users.js",
