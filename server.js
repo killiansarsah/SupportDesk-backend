@@ -8,6 +8,9 @@ import bcrypt from 'bcryptjs';
 import User from './models/User.js';
 import Ticket from './models/Ticket.js';
 import emailService from './emailService.js';
+import generateToken from './utils/auth.js';
+import { protect, admin, supportAgent } from './middleware/authMiddleware.js';
+import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -91,24 +94,28 @@ app.post('/api/auth/login', async (req, res) => {
     );
     
     console.log('✅ Login successful for:', user.name);
-    res.json({ success: true, user, token: `mock_token_${user._id}` });
+    const token = generateToken(user);
+    res.json({ success: true, user, token });
   } catch (error) {
     console.error('❌ Login error:', error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', async (req, res, next) => {
   try {
     const { email, name, phone, role, password } = req.body;
     
     console.log('📝 Registration attempt for:', email);
-    
-    if (!email || !name || !phone || !role) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'All fields are required: email, name, phone, role' 
-      });
+
+    if (!email || !name || !phone || !role || !password) {
+      res.status(400);
+      throw new Error('Please add all fields');
+    }
+
+    if (password.length < 6) {
+        res.status(400);
+        throw new Error('Password must be at least 6 characters');
     }
     
     const existingUser = await User.findOne({ email });
@@ -130,10 +137,10 @@ app.post('/api/auth/register', async (req, res) => {
     await user.save();
     
     console.log('✅ Registration successful for:', user.name);
-    res.json({ success: true, user, token: `mock_token_${user._id}` });
+    const token = generateToken(user);
+    res.status(201).json({ success: true, user, token });
   } catch (error) {
-    console.error('❌ Registration error:', error.message);
-    res.status(500).json({ success: false, error: error.message });
+    next(error);
   }
 });
 
@@ -173,7 +180,8 @@ app.post('/api/auth/google/signin', async (req, res) => {
     
     if (result.success) {
       console.log('✅ Google sign-in successful for:', result.user.email);
-      res.json(result);
+      const token = generateToken(result.user);
+      res.json({ ...result, token });
     } else {
       console.log('❌ Google sign-in failed:', result.error);
       res.status(401).json(result);
@@ -213,7 +221,8 @@ app.post('/api/auth/google/signup', async (req, res) => {
     
     if (result.success) {
       console.log('✅ Google sign-up successful for:', result.user.email);
-      res.json(result);
+      const token = generateToken(result.user);
+      res.json({ ...result, token });
     } else {
       console.log('❌ Google sign-up failed:', result.error);
       res.status(400).json(result);
@@ -294,7 +303,7 @@ app.post('/api/auth/google/unlink', async (req, res) => {
 // End of Google OAuth routes
 
 // User Routes
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', protect, admin, async (req, res) => {
   try {
     const users = await User.find();
     res.json(users);
@@ -304,27 +313,14 @@ app.get('/api/users', async (req, res) => {
 });
 
 // Ticket Routes
-app.get('/api/tickets', async (req, res) => {
+app.get('/api/tickets', protect, async (req, res) => {
   try {
-    const { userId, userRole, status, priority, category, search } = req.query;
+    const { status, priority, category, search } = req.query;
     
     let query = {};
-    
-    if (userRole === 'customer' && userId) {
-      if (!mongoose.Types.ObjectId.isValid(userId)) {
-        const userMap = {
-          '1': 'admin@company.com',
-          '2': 'agent@company.com', 
-          '3': 'customer@email.com'
-        };
-        const email = userMap[userId];
-        if (email) {
-          const user = await User.findOne({ email });
-          if (user) query.customerId = user._id;
-        }
-      } else {
-        query.customerId = userId;
-      }
+
+    if (req.user.role === 'customer') {
+      query.customerId = req.user._id;
     }
     
     if (status) query.status = { $in: status.split(',') };
@@ -361,28 +357,12 @@ app.get('/api/tickets', async (req, res) => {
   }
 });
 
-app.post('/api/tickets', async (req, res) => {
+app.post('/api/tickets', protect, async (req, res) => {
   try {
-    let customerId = req.body.customerId;
-    
+    const { customerId } = req.body;
+
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
-      const userMap = {
-        '1': 'admin@company.com',
-        '2': 'agent@company.com', 
-        '3': 'customer@email.com'
-      };
-      
-      const email = userMap[customerId];
-      if (email) {
-        const user = await User.findOne({ email });
-        if (user) {
-          customerId = user._id;
-        } else {
-          return res.status(400).json({ error: 'User not found' });
-        }
-      } else {
-        return res.status(400).json({ error: 'Invalid customerId' });
-      }
+        return res.status(400).json({ error: 'Invalid customer ID' });
     }
 
     const ticket = new Ticket({
@@ -453,22 +433,12 @@ app.post('/api/tickets', async (req, res) => {
   }
 });
 
-app.put('/api/tickets/:id', async (req, res) => {
+app.put('/api/tickets/:id', protect, supportAgent, async (req, res) => {
   try {
     const updateData = { ...req.body, updatedAt: new Date() };
     
     if (updateData.assignedTo && !mongoose.Types.ObjectId.isValid(updateData.assignedTo)) {
-      const userMap = {
-        '1': 'admin@company.com',
-        '2': 'agent@company.com', 
-        '3': 'customer@email.com'
-      };
-      
-      const email = userMap[updateData.assignedTo];
-      if (email) {
-        const user = await User.findOne({ email });
-        if (user) updateData.assignedTo = user._id;
-      }
+        return res.status(400).json({ error: 'Invalid assignedTo ID' });
     }
     
     // Get the original ticket to check for status changes
@@ -543,14 +513,20 @@ app.put('/api/tickets/:id', async (req, res) => {
   }
 });
 
-app.get('/api/tickets/:id', async (req, res) => {
+app.get('/api/tickets/:id', protect, async (req, res) => {
   try {
     const ticket = await Ticket.findById(req.params.id)
       .populate('customerId', 'name email')
       .populate('assignedTo', 'name email');
     
     if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
+      res.status(404);
+      throw new Error('Ticket not found');
+    }
+
+    if (req.user.role === 'customer' && ticket.customerId._id.toString() !== req.user._id.toString()) {
+      res.status(401);
+      throw new Error('Not authorized to view this ticket');
     }
     
     const response = {
@@ -569,7 +545,7 @@ app.get('/api/tickets/:id', async (req, res) => {
 // Email Routes
 
 // Manually send resolution email
-app.post('/api/tickets/:id/send-resolution-email', async (req, res) => {
+app.post('/api/tickets/:id/send-resolution-email', protect, supportAgent, async (req, res) => {
   try {
     const ticket = await Ticket.findById(req.params.id)
       .populate('customerId', 'name email')
@@ -620,7 +596,7 @@ app.post('/api/tickets/:id/send-resolution-email', async (req, res) => {
 });
 
 // Performance Analytics Routes
-app.get('/api/performance/overview', async (req, res) => {
+app.get('/api/performance/overview', protect, admin, async (req, res) => {
   try {
     const totalTickets = await Ticket.countDocuments();
     const resolvedTickets = await Ticket.countDocuments({ status: { $in: ['resolved', 'closed'] } });
@@ -666,7 +642,7 @@ app.get('/api/performance/overview', async (req, res) => {
   }
 });
 
-app.get('/api/performance/agents', async (req, res) => {
+app.get('/api/performance/agents', protect, admin, async (req, res) => {
   try {
     const agents = await User.find({ role: 'support-agent' }).select('name email');
     
@@ -718,11 +694,27 @@ app.get('/api/performance/agents', async (req, res) => {
 });
 
 // Message Routes
-app.post('/api/tickets/:id/messages', async (req, res) => {
+app.post('/api/tickets/:id/messages', protect, async (req, res, next) => {
   try {
     const ticket = await Ticket.findById(req.params.id);
     if (!ticket) {
-      return res.status(404).json({ error: 'Ticket not found' });
+        res.status(404);
+        throw new Error('Ticket not found');
+    }
+
+    // Authorization check
+    const isCustomer = req.user.role === 'customer';
+    const isOwner = ticket.customerId.toString() === req.user._id.toString();
+    const isAgentOrAdmin = ['support-agent', 'administrator'].includes(req.user.role);
+
+    if (isCustomer && !isOwner) {
+        res.status(401);
+        throw new Error('Not authorized to post on this ticket');
+    }
+
+    if (!isOwner && !isAgentOrAdmin) {
+        res.status(401);
+        throw new Error('Not authorized to post on this ticket');
     }
     
     const message = {
@@ -765,15 +757,8 @@ app.get('/api/health', (req, res) => {
 });
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('❌ Server Error:', err.message);
-  res.status(500).json({ error: 'Internal server error', message: err.message });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found', path: req.originalUrl });
-});
+app.use(notFound);
+app.use(errorHandler);
 
 // Start server
 app.listen(PORT, async () => {
